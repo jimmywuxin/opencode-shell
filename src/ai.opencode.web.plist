@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  opencode 后台服务的 launchd 定义（模板，由 build.sh 渲染后安装到
+  ~/Library/LaunchAgents/ai.opencode.web.plist）。
+
+  占位符（build.sh 用 sed 替换，只作用于 <string> 行）：
+    HOME  用户家目录 —— launchd 不读 shell 的 PATH/HOME 约定，必须绝对路径
+
+  要点：
+  - 不让 launchd 直接跑 `opencode serve`：v2 的 `opencode pair` 只认「托管服务」，
+    独立 serve 进程会占端口，导致 pair 报 "Managed service port ... already in use"。
+    所以托管方是 supervisor.sh，由它调 `opencode service start/stop`。
+  - `service start` 会 daemonize 后退出，launchd 无法 KeepAlive 它 → supervisor.sh
+    常驻前台并每 20s 探端口，挂了重拉。
+  - RunAtLoad + KeepAlive：登录即拉起、崩了自动重启。停服务必须走
+    `launchctl bootout gui/$(id -u)/ai.opencode.web`，pkill 会被 KeepAlive 复活。
+  - WorkingDirectory 钉在 HOME：launchd 默认 cwd 是 `/`（只读），opencode 的
+    会话/仓库路径可能按 cwd 解析（dsh 同款坑，2026-10-18 预防性钉住）。
+  - Umask 63 = 0o077：日志里有 server password，默认 644 同机其他账户可读。
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>ai.opencode.web</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>@HOME@/.local/share/opencode/supervisor.sh</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>@HOME@/.local/share/opencode/log/launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>@HOME@/.local/share/opencode/log/launchd.err.log</string>
+    <key>WorkingDirectory</key>
+    <string>@HOME@</string>
+    <key>Umask</key>
+    <integer>63</integer>
+</dict>
+</plist>
