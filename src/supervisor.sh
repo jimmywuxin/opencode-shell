@@ -11,13 +11,37 @@
 #   本脚本 = 常驻前台 + 每 20 秒探一次端口，挂了就重新 start。
 set -u
 
-OC="$HOME/.npm-global/bin/opencode"
+# 找 opencode 可执行文件：launchd 的 PATH 只有 /usr/bin:/bin:/usr/sbin:/sbin，
+# 必须按常见安装位置探；OPENCODE_BIN 可强制指定。
+resolve_oc() {
+  local c
+  if [ -n "${OPENCODE_BIN:-}" ] && [ -x "${OPENCODE_BIN}" ]; then
+    printf '%s' "$OPENCODE_BIN"; return 0
+  fi
+  for c in "$(command -v opencode 2>/dev/null)" \
+           "$HOME/.npm-global/bin/opencode" \
+           "$HOME/.opencode/bin/opencode" \
+           "$HOME/.local/bin/opencode" \
+           /opt/homebrew/bin/opencode \
+           /usr/local/bin/opencode; do
+    if [ -n "$c" ] && [ -x "$c" ]; then printf '%s' "$c"; return 0; fi
+  done
+  return 1
+}
+OC="$(resolve_oc || true)"
 LOG_DIR="$HOME/.local/share/opencode/log"
 PORT=49374
 URL="http://127.0.0.1:${PORT}"
 mkdir -p "$LOG_DIR"
 
 log() { printf '[%s] %s\n' "$(date '+%F %T')" "$1" >> "$LOG_DIR/supervisor.log"; }
+
+# 找不到 CLI 就别进入循环（否则每 20s 刷一次 command not found）
+if [ -z "$OC" ]; then
+  log "未找到 opencode 命令（试过 PATH、~/.npm-global/bin、~/.opencode/bin、~/.local/bin、/opt/homebrew/bin、/usr/local/bin）"
+  log "可用 OPENCODE_BIN=/path/to/opencode 指定，或在 launchd plist 里加该环境变量"
+  exit 1
+fi
 
 cleanup() {
   log "收到退出信号，停止托管服务"

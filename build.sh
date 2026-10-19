@@ -18,7 +18,8 @@ for arg in "$@"; do
   [ "$arg" = "--reload" ] && RELOAD=1
 done
 
-APP="$HOME/Applications/opencode.app"
+APP_DIR="${OPENCODE_APP_DIR:-$HOME/Applications}"
+APP="$APP_DIR/opencode.app"
 PLIST_DST="$HOME/Library/LaunchAgents/ai.opencode.web.plist"
 STATE_DIR="$HOME/.local/share/opencode"
 LOG_DIR="$STATE_DIR/log"
@@ -27,7 +28,23 @@ BUILD_DIR="$PWD/build"
 DOMAIN="gui/$(id -u)"
 LABEL="ai.opencode.web"
 
-OC="$(command -v opencode || echo "$HOME/.npm-global/bin/opencode")"
+# opencode 可执行文件：优先级 OPENCODE_BIN > PATH > 常见安装位置
+resolve_oc() {
+  local c
+  if [ -n "${OPENCODE_BIN:-}" ] && [ -x "${OPENCODE_BIN}" ]; then
+    printf '%s' "$OPENCODE_BIN"; return 0
+  fi
+  for c in "$(command -v opencode 2>/dev/null)" \
+           "$HOME/.npm-global/bin/opencode" \
+           "$HOME/.opencode/bin/opencode" \
+           "$HOME/.local/bin/opencode" \
+           /opt/homebrew/bin/opencode \
+           /usr/local/bin/opencode; do
+    if [ -n "$c" ] && [ -x "$c" ]; then printf '%s' "$c"; return 0; fi
+  done
+  return 1
+}
+OC="$(resolve_oc || true)"
 SWIFTC="/usr/bin/swiftc"
 
 # 版本号从 git tag 取，缺 tag（浅克隆/非仓库）退到 0.0.0，不让构建失败
@@ -105,6 +122,7 @@ fi
 
 # 组装成功，现在才换掉旧产物（旧产物移废纸篓而非 rm，可恢复）
 REPLACED=""
+mkdir -p "$APP_DIR"
 if [ -e "$APP" ]; then
   mkdir -p "$HOME/.Trash"
   REPLACED="$HOME/.Trash/opencode.app.bak-$(date +%Y%m%d%H%M%S)"

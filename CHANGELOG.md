@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## 未发布
+
+**为分享做的可移植性改造**
+
+- `src/launcher.sh`、`src/supervisor.sh`、`build.sh`：opencode CLI 不再写死 `~/.npm-global/bin/opencode`，改为 `OPENCODE_BIN` → `PATH` → `~/.npm-global/bin` → `~/.opencode/bin` → `~/.local/bin` → `/opt/homebrew/bin` → `/usr/local/bin` 依次探测（launchd 的 PATH 只有 `/usr/bin:/bin:/usr/sbin:/sbin`，必须显式探测）；找不到时 supervisor 记日志退出，不再每 20s 刷 command not found
+- `build.sh`：新增 `OPENCODE_APP_DIR`（默认 `~/Applications`），并在替换前 `mkdir -p`
+- 新增 `LICENSE`（MIT）
+- README 重写：体积对比（612 KB vs 官方 Electron 约 144 MB）、适用边界（诚实写明上游为何选 Electron）、安装步骤、环境变量、非官方声明
+
 ## v1.1.1 — 2026-10-19
 
 **应用图标重绘**

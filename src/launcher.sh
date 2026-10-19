@@ -25,8 +25,26 @@ URL="http://127.0.0.1:${PORT}"
 LABEL="ai.opencode.web"
 DOMAIN="gui/$(id -u)"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-OC="$HOME/.npm-global/bin/opencode"
 LOG_DIR="$HOME/.local/share/opencode/log"
+
+# 找 opencode 可执行文件。launchd/LaunchServices 给的 PATH 极简（/usr/bin:/bin:...），
+# 所以不能只靠 command -v；按常见安装位置依次探测，OPENCODE_BIN 可强制指定。
+resolve_oc() {
+  local c
+  if [ -n "${OPENCODE_BIN:-}" ] && [ -x "${OPENCODE_BIN}" ]; then
+    printf '%s' "$OPENCODE_BIN"; return 0
+  fi
+  for c in "$(command -v opencode 2>/dev/null)" \
+           "$HOME/.npm-global/bin/opencode" \
+           "$HOME/.opencode/bin/opencode" \
+           "$HOME/.local/bin/opencode" \
+           /opt/homebrew/bin/opencode \
+           /usr/local/bin/opencode; do
+    if [ -n "$c" ] && [ -x "$c" ]; then printf '%s' "$c"; return 0; fi
+  done
+  return 1
+}
+OC="$(resolve_oc || true)"
 
 # 诊断日志：只写 stderr，壳会原样落到 shell.log（不含 URL/token）。
 log() { printf '[launcher] %s\n' "$1" >&2; }
