@@ -1,5 +1,33 @@
 # CHANGELOG
 
+## v1.1.0 — 2026-10-19
+
+窗口层从「exec Edge `--app`」换成原生 NSWindow + WKWebView，红叉改为隐藏窗口（飞书式）。服务层（launchd / supervisor）不动。
+
+**新增**
+
+- `src/ShellApp.swift`：原生壳。红叉 / `⌘W` = `orderOut` 隐藏窗口（Dock 不留缩略图、页面状态保留），点 Dock 图标或「窗口 → 显示主窗口」恢复；`⌘Q` 退出，`⌘M` 标准最小化，`⌘R` 重新连接；菜单（App/编辑/视图/窗口）；`<input type=file>` → `NSOpenPanel`；`window.open`/`target=_blank` → 同源本窗口、外链系统浏览器；主框架跳外站一律 `NSWorkspace`；下载 `WKDownloadDelegate` + `NSSavePanel`；媒体权限 `.deny`；`isInspectable`；`.default()` data store 持久化 cookie。
+- `launcher.sh --url`：ensure 服务就绪后把目标 URL 打到 stdout（契约：stdout 只有一个 URL、失败非 0 且为空、诊断走 stderr）。
+
+**变更**
+
+- `src/launcher.sh`：删掉全部浏览器逻辑（`BROWSER` / `BROWSER_PROFILE` / `open_window` / `reap_zombie_browser` / `disable_browser_translate`），只保留「探活 → kickstart / bootstrap / nohup 三级兜底 → 等 30s」。`--ensure` 保留为无参默认行为。
+- `build.sh`：`swiftc -O -parse-as-library` 编译原生壳；`launcher.sh` 从 `Contents/MacOS` 移到 `Contents/Resources`；先组装 `build/opencode.app.new` 再替换旧产物（失败不留空档）；全部资源就位后 ad-hoc 签名。
+- `src/Info.plist`：加 `NSAppTransportSecurity`（`NSAllowsLocalNetworking` + `NSAllowsArbitraryLoads`），`LSMinimumSystemVersion` 11.0 → 12.0。
+- 认证仍走 `opencode pair`，但改由壳执行 launcher 取 URL；`shell.log`（0600，`~/.local/share/opencode/log/`）只记长度/标题/cookie 名，URL 与 token 不落盘，另加 `/auth/connect/<token>` 兜底脱敏。
+
+**验证**
+
+- WebKit 探针：标题 `OpenCode`、600 个元素、无 JS 错误、`opencode_session_49374` cookie 已种下、`takeSnapshot` 截图正常。
+- 启动：`ensure exit=0`、`url acquired (len=58)`、`page title: OpenCode`、进程存活、49374 有 ESTABLISHED、窗口 `CGWindowList` 归属本 app。
+- 红叉自测：`after close: visible=false miniaturized=false` → `after reopen: visible=true` → `second close: visible=false`。
+
+**已知行为**
+
+- 服务端口固定 49374（opencode 托管服务默认值）。改端口需同步 `src/supervisor.sh` 的 `PORT`、`src/ShellApp.swift` 的 `baseURL` 与同源判定。
+- `launchctl` 在 WorkBuddy/IDE 进程内不可用（error 5），`--reload` 必须在真终端执行。
+- 不再需要 Microsoft Edge；旧 `~/.local/share/opencode/edge-profile`（约 550MB）稳定后可删。
+
 ## v1.0.0 — 2026-10-18
 
 首个版本，把手工搭的三层结构收进仓库。
