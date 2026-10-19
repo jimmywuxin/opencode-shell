@@ -46,6 +46,14 @@ bash build.sh --reload   # 同上，并重载 launchd（须在真终端；WorkBu
 | `~/Library/LaunchAgents/ai.opencode.web.plist` | 开机自启配置 |
 | `~/.local/share/opencode/log/` | supervisor / opencode / shell 日志 |
 
+图标源在 `tools/render_icon.swift`（深炭色 squircle + 银色金属框 + 内嵌暗屏），改完重跑：
+
+```bash
+/usr/bin/swiftc -O tools/render_icon.swift -o /tmp/render_icon
+/tmp/render_icon assets/icon_1024.png
+bash build.sh     # 生成 10 档 iconset → AppIcon.icns
+```
+
 依赖：`opencode` CLI（`npm i -g @opencode/cli`）、macOS 12+、Command Line Tools（`swiftc`）、系统自带 `sips` + `iconutil`（构建图标用）。**不需要 Edge。**
 
 `build.sh` 先组装 `build/opencode.app.new`，全部成功后才把旧产物移进废纸篓换新，中途失败不会留下空壳。

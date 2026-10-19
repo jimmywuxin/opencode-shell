@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## 未发布
+
+**应用图标重绘**
+
+- 参照 `opencode-desktop-icon.png` 重做图标：深炭色 squircle 底 + 银色金属框（竖向渐变、开口下沿高光倒角）+ 内嵌暗屏（黑→灰反射带→暖黑），比例与配色按参考图 240×240 逐点采样还原（框占 22.5%–76.7% × 15.8%–83.8%，屏占 36.2%–63.3% × 29.2%–70.0%）
+- 新增 `tools/render_icon.swift`：图标源随代码进仓库，改尺寸/配色重跑一条命令即可，不再需要外部图形软件
+- `assets/icon_1024.png` 更新；`build.sh` 仍按 10 档尺寸生成 `AppIcon.icns`
+
 ## v1.1.0 — 2026-10-19
 
 窗口层从「exec Edge `--app`」换成原生 NSWindow + WKWebView，红叉改为隐藏窗口（飞书式）。服务层（launchd / supervisor）不动。
