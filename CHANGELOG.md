@@ -2,6 +2,11 @@
 
 ## 未发布
 
+**升级 CLI 后自动换血**
+
+- `src/supervisor.sh`：新增二进制指纹检测（`stat -L -f '%m-%z'`，跟随软链取目标文件的 mtime + size）。每 20s 探活时先比对指纹，变化即 `service stop` → 等 2s 释放端口 → `service start`，把长驻的旧 `serve --service` 进程换成新二进制。此前升级 npm 包只替换磁盘文件，运行中的 daemon 仍加载旧二进制与旧前端资源，app 里永远显示旧版本（2026-10-26 实踩：磁盘 v2.1.4、进程还是 3 天前起的旧版）
+- 顺带把「服务无响应」的重新拉起抽成 `restart_service()`，与换血共用同一条 stop → wait → start 路径
+
 **为分享做的可移植性改造**
 
 - `src/launcher.sh`、`src/supervisor.sh`、`build.sh`：opencode CLI 不再写死 `~/.npm-global/bin/opencode`，改为 `OPENCODE_BIN` → `PATH` → `~/.npm-global/bin` → `~/.opencode/bin` → `~/.local/bin` → `/opt/homebrew/bin` → `/usr/local/bin` 依次探测（launchd 的 PATH 只有 `/usr/bin:/bin:/usr/sbin:/sbin`，必须显式探测）；找不到时 supervisor 记日志退出，不再每 20s 刷 command not found

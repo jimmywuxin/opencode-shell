@@ -56,6 +56,23 @@ alive() {
   [ "$code" = "200" ] || [ "$code" = "401" ]
 }
 
+# 二进制指纹 = 目标文件 mtime + size。
+# 用途：npm 升级只替换磁盘文件，长驻的 `serve --service` 进程仍跑旧二进制、
+# 前端资源也还是旧的 → app 里永远看到旧版（2026-10-26 实踩）。
+# -L 必须加：~/.npm-global/bin/opencode 是软链，不跟随就永远读到软链自身的 mtime。
+fp() {
+  stat -L -f '%m-%z' "$OC" 2>/dev/null || printf 'unknown'
+}
+
+# 升级后停止服务 → supervisor 自己继续活着，只换被托管的 daemon。
+# stop 后等 2s 让端口释放，避免 start 撞 "port already in use"。
+restart_service() { # $1 = 触发原因（写日志用）
+  log "$1，重启托管服务"
+  "$OC" service stop >/dev/null 2>&1
+  sleep 2
+  "$OC" service start >> "$LOG_DIR/supervisor.log" 2>&1
+}
+
 if alive; then
   log "端口 $PORT 已有服务在跑，接管守护"
 else
@@ -63,12 +80,21 @@ else
   "$OC" service start >> "$LOG_DIR/supervisor.log" 2>&1
 fi
 
+OC_FP="$(fp)"
+
 while :; do
   sleep 20
+
+  # 先查换血，再查存活：升级后端口通常仍通，只查 alive 发现不了
+  NEW_FP="$(fp)"
+  if [ "$NEW_FP" != "$OC_FP" ] && [ "$NEW_FP" != "unknown" ] && [ "$OC_FP" != "unknown" ]; then
+    log "检测到 opencode 二进制已更新（$OC_FP → $NEW_FP），需要重启服务加载新版本"
+    restart_service "二进制变更"
+    OC_FP="$NEW_FP"
+    continue
+  fi
+
   if ! alive; then
-    log "服务无响应，重新拉起"
-    "$OC" service stop >/dev/null 2>&1
-    sleep 1
-    "$OC" service start >> "$LOG_DIR/supervisor.log" 2>&1
+    restart_service "服务无响应"
   fi
 done
