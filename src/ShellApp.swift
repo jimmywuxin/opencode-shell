@@ -74,6 +74,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     private var webView: WKWebView!
     private var connecting = false
 
+    // 内容进程崩溃计数（5s 窗口内），见 webViewWebContentProcessDidTerminate
+    private var contentCrashCount = 0
+    private var lastContentCrashAt = Date.distantPast
+
     // MARK: - 生命周期
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -420,6 +424,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         shellLog("load failed: \(error.localizedDescription)")
         connecting = false
         loadMessagePage(title: "页面加载失败", detail: "\(error.localizedDescription)\n按 ⌘R 重新连接。")
+    }
+
+    // MARK: - 内容进程回收
+
+    // WebKit 内容进程被系统回收（opencode 是长会话 + 大段代码渲染，内存压力大）
+    // 时窗口会永久停在白屏，只能 ⌘Q 重开。cookie 存在 .default() store 里，
+    // reload 不掉登录 —— 但页面本身必崩时会无限重载，所以 5s 窗口内最多重载
+    // 2 次，超限改走 connect() 重新配对（2026-11-03 清单 P0-2）。
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        let now = Date()
+        if now.timeIntervalSince(lastContentCrashAt) > 5 { contentCrashCount = 0 }
+        lastContentCrashAt = now
+        contentCrashCount += 1
+
+        guard webView.url != nil else {
+            shellLog("web content process terminated before any page: reconnecting")
+            contentCrashCount = 0
+            connect()
+            return
+        }
+        if contentCrashCount > 2 {
+            shellLog("web content process terminated \(contentCrashCount) times in 5s: reconnecting")
+            contentCrashCount = 0
+            connect()
+            return
+        }
+        shellLog("web content process terminated: reloading (\(contentCrashCount)/2)")
+        webView.reload()
     }
 
     // MARK: - WKUIDelegate
