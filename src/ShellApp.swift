@@ -22,6 +22,11 @@ import WebKit
 private let baseURL = URL(string: "http://127.0.0.1:49374/")!
 private let windowFrameName = "opencodeMainWindow"
 
+// 窗口稳定状态下的样式掩码。WKWebView 进元素全屏后可能给窗口加上
+// .fullSizeContentView 之类的位且退出时不还原，标题栏会变成浮在内容上的
+// 一层、交通灯位置随之错乱 —— 所以退出全屏后要按这个基准复位。
+private let baseStyleMask: NSWindow.StyleMask = [.titled, .closable, .miniaturizable, .resizable]
+
 // MARK: - 日志（脱敏）
 
 private let logQueue = DispatchQueue(label: "com.jimmy.opencode-shell.log")
@@ -78,6 +83,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     private var contentCrashCount = 0
     private var lastContentCrashAt = Date.distantPast
 
+    // 标题栏自愈状态：baseline 只在启动稳定时采一次，之后全部相对它判断
+    private var healthyCloseCenter: NSPoint?
+    private var pendingRepair: DispatchWorkItem?
+    private var repairAttempts = 0
+    private var repairing = false
+    private var lastRepairAt = Date.distantPast
+    private var savedFrameBeforeFullScreen: NSRect?
+
     // MARK: - 生命周期
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -129,7 +142,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
 
         window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1280, height: 860),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            styleMask: baseStyleMask,
             backing: .buffered,
             defer: false
         )
@@ -139,11 +152,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         window.isRestorable = false
         window.tabbingMode = .disallowed
         window.delegate = self        // 漏了这行 windowShouldClose 永不触发
-        window.contentView = webView
+
+        // 用普通容器承载 WKWebView，而不是让 webView 直接当 contentView：
+        // 直接当的话，全屏退出后窗口/contentView 的 frame 账容易算错，
+        // 交通灯与标题栏可能错位（2026-11-03 清单 P0-3）。
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 1280, height: 860))
+        container.autoresizesSubviews = true
+        webView.frame = container.bounds
+        webView.autoresizingMask = [.width, .height]
+        container.addSubview(webView)
+        window.contentView = container
+
         if !window.setFrameUsingName(windowFrameName) { window.center() }
         window.setFrameAutosaveName(windowFrameName)
         window.makeKeyAndOrderFront(nil)
         activateApp()
+
+        // 启动稳定后记一次正常几何，后面靠它判断标题栏是否被全屏搞乱
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            self?.captureHealthyBaseline()
+        }
     }
 
     private func activateApp() {
@@ -152,6 +180,148 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         } else {
             NSApp.activate(ignoringOtherApps: true)
         }
+    }
+
+    // MARK: - 标题栏自愈（全屏进出后按钮/标题错位）
+
+    private func fmt(_ r: NSRect) -> String {
+        String(format: "%.0f,%.0f %.0fx%.0f", r.minX, r.minY, r.width, r.height)
+    }
+
+    private func fmt(_ p: NSPoint) -> String {
+        String(format: "%.1f,%.1f", p.x, p.y)
+    }
+
+    /// 红绿灯（关闭按钮）中心点，换算到窗口坐标系
+    private func closeButtonCenterInWindow() -> NSPoint? {
+        guard let button = window.standardWindowButton(.closeButton),
+              let superview = button.superview else { return nil }
+        return superview.convert(NSPoint(x: button.frame.midX, y: button.frame.midY), to: nil)
+    }
+
+    /// 标题栏高度 = 窗口高 - 内容布局区高。正常约 28；被 .fullSizeContentView 吃掉时变 0
+    private var titleBarHeight: CGFloat {
+        max(0, window.frame.height - window.contentLayoutRect.height)
+    }
+
+    private func captureHealthyBaseline() {
+        guard let center = closeButtonCenterInWindow() else { return }
+        healthyCloseCenter = center
+        shellLog("baseline: close=\(fmt(center)) barH=\(titleBarHeight) mask=\(window.styleMask.rawValue) frame=\(fmt(window.frame))")
+    }
+
+    /// 标题栏是否被搞乱。判据全部相对窗口自身几何，不依赖绝对坐标（窗口大小可变）：
+    /// 按钮相对左边距应与基准一致、应垂直居中于标题栏、标题栏高度应正常。
+    private func titleBarIsBroken() -> Bool {
+        guard !window.styleMask.contains(.fullScreen) else { return false }
+        guard let baseline = healthyCloseCenter else { return false }
+        guard let center = closeButtonCenterInWindow() else {
+            return window.styleMask.contains(.titled)   // 该有按钮却没有 = 已坏
+        }
+        if abs(center.x - baseline.x) > 3 { return true }
+        let bar = titleBarHeight
+        if bar < 20 { return true }                                     // 标题栏被内容吃掉
+        if center.y < window.contentLayoutRect.height { return true }   // 按钮掉进内容区
+        if center.y > window.frame.height { return true }               // 按钮顶出窗口
+        let expectedY = window.frame.height - bar / 2
+        if abs(center.y - expectedY) > 6 { return true }                // 未垂直居中
+        return false
+    }
+
+    private func scheduleTitleBarRepair(_ reason: String, delay: TimeInterval) {
+        pendingRepair?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.pendingRepair = nil
+            self.repairTitleBarIfNeeded(reason)
+        }
+        pendingRepair = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    private func repairTitleBarIfNeeded(_ reason: String) {
+        guard window != nil, !window.styleMask.contains(.fullScreen) else { return }
+        guard !repairing else { return }
+        guard titleBarIsBroken() else {
+            repairAttempts = 0
+            return
+        }
+        // 冷却（自愈动作会自身触发 resize/becomeKey）：被挡下就排一次重试，
+        // 但不无限重排——最多 6 次仍修不好就记日志收手。
+        if Date().timeIntervalSince(lastRepairAt) < 1.0 {
+            guard repairAttempts < 6 else { return }
+            repairAttempts += 1
+            scheduleTitleBarRepair("\(reason) retry", delay: 1.2)
+            return
+        }
+
+        repairing = true
+        lastRepairAt = Date()
+        defer { repairing = false }
+
+        shellLog("titlebar broken (\(reason)): close=\(closeButtonCenterInWindow().map { fmt($0) } ?? "nil") barH=\(titleBarHeight) mask=\(window.styleMask.rawValue) frame=\(fmt(window.frame))")
+
+        // ① 复位样式掩码：WebKit 全屏常残留 .fullSizeContentView，标题栏会变成浮层
+        if window.styleMask != baseStyleMask {
+            window.styleMask = baseStyleMask
+            window.contentView?.superview?.layoutSubtreeIfNeeded()
+            if !titleBarIsBroken() { shellLog("repair ok: styleMask reset"); return }
+        }
+
+        // ② 尺寸微调 1pt 再还原，逼 AppKit 按新宽度重排标题栏与交通灯
+        let frame = window.frame
+        window.setFrame(NSRect(x: frame.minX, y: frame.minY, width: frame.width + 1, height: frame.height),
+                        display: true)
+        window.setFrame(frame, display: true)
+        window.contentView?.superview?.layoutSubtreeIfNeeded()
+        if !titleBarIsBroken() { shellLog("repair ok: frame nudge"); return }
+
+        // ③ 翻转 .titled 位，让 AppKit 重建标题栏容器
+        window.styleMask = baseStyleMask.subtracting(.titled)
+        window.styleMask = baseStyleMask
+        window.contentView?.superview?.layoutSubtreeIfNeeded()
+        if !titleBarIsBroken() { shellLog("repair ok: titled toggle"); return }
+
+        // ④ 刷新透明标题栏状态（会连带重算交通灯位置）。本项目从不设透明标题栏，
+        //    这里只是触发一次重排，结尾必须回到 false。
+        window.titlebarAppearsTransparent = true
+        window.titlebarAppearsTransparent = false
+        shellLog(titleBarIsBroken() ? "repair failed: still broken" : "repair ok: titlebar refresh")
+    }
+
+    // MARK: - 全屏事件
+
+    func windowWillEnterFullScreen(_ notification: Notification) {
+        savedFrameBeforeFullScreen = window.frame
+        shellLog("enter fullscreen: saved=\(fmt(window.frame))")
+    }
+
+    func windowDidEnterFullScreen(_ notification: Notification) {
+        shellLog("did enter fullscreen: frame=\(fmt(window.frame))")
+        scheduleTitleBarRepair("didEnterFullScreen", delay: 0.3)
+    }
+
+    func windowDidExitFullScreen(_ notification: Notification) {
+        shellLog("did exit fullscreen: frame=\(fmt(window.frame))")
+        // WebKit 元素全屏常把窗口撑到整屏却不缩回：恢复到进全屏前的尺寸
+        if let saved = savedFrameBeforeFullScreen {
+            savedFrameBeforeFullScreen = nil
+            let screenHeight = window.screen?.visibleFrame.height ?? 0
+            if saved.width > 0, window.frame.height >= screenHeight - 2 {
+                window.setFrame(saved, display: true)
+                shellLog("restored frame: \(fmt(saved))")
+            }
+        }
+        scheduleTitleBarRepair("didExitFullScreen", delay: 0.25)
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        guard !window.styleMask.contains(.fullScreen) else { return }
+        scheduleTitleBarRepair("resize", delay: 0.3)
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        scheduleTitleBarRepair("becomeKey", delay: 0.2)
     }
 
     // MARK: - 连接
