@@ -1,5 +1,18 @@
 # CHANGELOG
 
+## 未发布
+
+按 `docs/改进清单_2026-11-03.md` 落地（P0-1 / P0-2 / P0-3 / P1-1 / P1-2 / P1-3 / P2-2 / P2-3）。
+
+- **P0-1 就绪判据统一**：`supervisor.sh` 的 `alive()` 只认 200/401，`launcher.sh` 认 200/204/302/401。服务一旦返回 302 就被判定死亡，每 20s `stop`/`start` 一次，自己把服务重启成不稳定态。现两处共用 `common.sh` 的 `oc_ready()`
+- **P0-2 内容进程回收自愈**：补 `webViewWebContentProcessDidTerminate`，5s 内最多 reload 2 次（不掉登录），超限改走 `connect()`，不再永久白屏
+- **P0-3 标题栏自愈**：webView 改由 `NSView` 容器承载；启动采一次 healthy baseline，退出全屏 / resize / 成为 key window 时按相对几何判断标题栏是否错位，三级修复（复位 styleMask → 1pt 微调 → 翻转 `.titled`），1s 冷却、最多重试 6 次
+- **P1-1 `⌘R` 快路径**：`⌘R` = `webView.reload()`（不跑 launcher、不重取 pair）；`⇧⌘R` = 完整重连
+- **P1-2 排障入口**：视图菜单加「重启服务」（kickstart -k，5s 后重连）、「打开日志」（`shell.log` + 子菜单 `supervisor.log`/`web.err.log`）、「服务状态」（HTTP 码 + launchd 托管 + 端口 PID，`NSAlert`）
+- **P1-3 pair token 复用**：新增 `launcher.sh --url-only`；壳先查会话 cookie（`opencode_session*` 未过期）有效则加载裸 URL，不调 `opencode pair`。`⇧⌘R` 仍强制重新配对；裸 URL 落到 `/auth` 页会自动补一次 pair
+- **P2-2 端口单一来源**：新增 `src/common.sh`（`PORT`/`URL`/`LABEL`/`LOG_DIR`、`oc_ready()`、`resolve_oc()`），`launcher.sh`/`supervisor.sh`/`build.sh` 共用；`Info.plist` 新增 `OpencodeServiceURL`（由 `build.sh` 从 `PORT` 渲染），`ShellApp.swift` 从 bundle 读，不再写死 `127.0.0.1:49374`
+- **P2-3 Gatekeeper 说明**：README 补 ad-hoc 签名与 `xattr -dr com.apple.quarantine` 放行步骤
+
 ## v1.2.0 — 2026-10-26
 
 **升级 CLI 后自动换血**
