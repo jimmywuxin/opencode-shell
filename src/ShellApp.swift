@@ -19,7 +19,16 @@ import WebKit
 //
 // 日志：~/.local/share/opencode/log/shell.log（0600）
 
-private let baseURL = URL(string: "http://127.0.0.1:49374/")!
+// 服务地址由 build.sh 从 src/common.sh 的 PORT 渲染进 Info.plist 的
+// OpencodeServiceURL（端口唯一来源）。bundle 里读不到时退回默认值，
+// 保证单独 swiftc 编译调试时也能跑。
+private let baseURL: URL = {
+    if let raw = Bundle.main.object(forInfoDictionaryKey: "OpencodeServiceURL") as? String,
+       let url = URL(string: raw) {
+        return url
+    }
+    return URL(string: "http://127.0.0.1:49374/")!
+}()
 private let windowFrameName = "opencodeMainWindow"
 
 // 窗口稳定状态下的样式掩码。WKWebView 进元素全屏后可能给窗口加上

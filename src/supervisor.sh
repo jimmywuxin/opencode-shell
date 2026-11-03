@@ -11,27 +11,12 @@
 #   本脚本 = 常驻前台 + 每 20 秒探一次端口，挂了就重新 start。
 set -u
 
-# 找 opencode 可执行文件：launchd 的 PATH 只有 /usr/bin:/bin:/usr/sbin:/sbin，
-# 必须按常见安装位置探；OPENCODE_BIN 可强制指定。
-resolve_oc() {
-  local c
-  if [ -n "${OPENCODE_BIN:-}" ] && [ -x "${OPENCODE_BIN}" ]; then
-    printf '%s' "$OPENCODE_BIN"; return 0
-  fi
-  for c in "$(command -v opencode 2>/dev/null)" \
-           "$HOME/.npm-global/bin/opencode" \
-           "$HOME/.opencode/bin/opencode" \
-           "$HOME/.local/bin/opencode" \
-           /opt/homebrew/bin/opencode \
-           /usr/local/bin/opencode; do
-    if [ -n "$c" ] && [ -x "$c" ]; then printf '%s' "$c"; return 0; fi
-  done
-  return 1
-}
+# 端口、日志目录、CLI 探测、就绪判据全部来自同目录 common.sh（单一来源）。
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=common.sh
+. "$SELF_DIR/common.sh" || { echo "[supervisor] 缺 common.sh（$SELF_DIR），无法探活" >&2; exit 1; }
+
 OC="$(resolve_oc || true)"
-LOG_DIR="$HOME/.local/share/opencode/log"
-PORT=49374
-URL="http://127.0.0.1:${PORT}"
 mkdir -p "$LOG_DIR"
 
 log() { printf '[%s] %s\n' "$(date '+%F %T')" "$1" >> "$LOG_DIR/supervisor.log"; }
@@ -50,16 +35,9 @@ cleanup() {
 }
 trap cleanup TERM INT
 
-# 判据必须与 launcher.sh 的 ready() 逐字一致（200/204/302/401）。
-# 只认 200/401 时，服务一旦进入 302 状态（内部重定向到 pairing 页），
-# 本脚本会每 20s 判一次死亡 → stop → start → 端口还没起来 → 再判死，
-# 自己人把服务重启到比没有 supervisor 更差（2026-11-03 清单 P0-1）。
-alive() {
-  local code
-  code="$(curl -s -o /dev/null -w "%{http_code}" --noproxy '*' --max-time 3 "$URL/" 2>/dev/null)"
-  case "$code" in 200|204|302|401) return 0 ;; esac
-  return 1
-}
+# 判据本体在 common.sh 的 oc_ready()，与 launcher 共用一份 —— 分叉过一次，
+# 只认 200/401 时服务一进 302 就被自己人每 20s 重启（2026-11-03 清单 P0-1）。
+alive() { oc_ready; }
 
 # 二进制指纹 = 目标文件 mtime + size。
 # 用途：npm 升级只替换磁盘文件，长驻的 `serve --service` 进程仍跑旧二进制、

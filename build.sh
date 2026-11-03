@@ -2,8 +2,9 @@
 # opencode-shell 构建脚本
 #   1) 图标：assets/icon_1024.png → build/AppIcon.icns（临时 iconset 用 trap 清理）
 #   2) 编译 Swift 原生壳 + 组装 .app → ~/Applications/opencode.app
-#      （Contents/MacOS/opencode = Swift 二进制；Contents/Resources/launcher.sh 只负责 ensure）
-#   3) 安装 supervisor.sh → ~/.local/share/opencode/supervisor.sh
+#      （Contents/MacOS/opencode = Swift 二进制；
+#        Contents/Resources/{launcher.sh,common.sh} 只负责 ensure）
+#   3) 安装 supervisor.sh + common.sh → ~/.local/share/opencode/
 #   4) 渲染 launchd 模板 → ~/Library/LaunchAgents/ai.opencode.web.plist（内容有变才写）
 #
 # 用法：bash build.sh [--reload]
@@ -28,22 +29,12 @@ BUILD_DIR="$PWD/build"
 DOMAIN="gui/$(id -u)"
 LABEL="ai.opencode.web"
 
-# opencode 可执行文件：优先级 OPENCODE_BIN > PATH > 常见安装位置
-resolve_oc() {
-  local c
-  if [ -n "${OPENCODE_BIN:-}" ] && [ -x "${OPENCODE_BIN}" ]; then
-    printf '%s' "$OPENCODE_BIN"; return 0
-  fi
-  for c in "$(command -v opencode 2>/dev/null)" \
-           "$HOME/.npm-global/bin/opencode" \
-           "$HOME/.opencode/bin/opencode" \
-           "$HOME/.local/bin/opencode" \
-           /opt/homebrew/bin/opencode \
-           /usr/local/bin/opencode; do
-    if [ -n "$c" ] && [ -x "$c" ]; then printf '%s' "$c"; return 0; fi
-  done
-  return 1
-}
+# 端口 / CLI 探测的唯一来源：src/common.sh（launcher、supervisor 也 source 同一份）。
+# PORT 还负责渲染 Info.plist 的 OpencodeServiceURL —— 换端口只改 common.sh。
+# shellcheck source=src/common.sh
+. src/common.sh
+SERVICE_URL="http://127.0.0.1:${PORT}/"
+
 OC="$(resolve_oc || true)"
 SWIFTC="/usr/bin/swiftc"
 
@@ -58,7 +49,7 @@ if [ ! -x "$OC" ]; then
   echo "错误：未找到 opencode（$OC）。先装：npm i -g @opencode/cli" >&2
   exit 1
 fi
-for f in src/ShellApp.swift src/launcher.sh src/supervisor.sh src/ai.opencode.web.plist src/Info.plist; do
+for f in src/ShellApp.swift src/launcher.sh src/supervisor.sh src/common.sh src/ai.opencode.web.plist src/Info.plist; do
   if [ ! -f "$f" ]; then
     echo "错误：缺文件 $f" >&2
     exit 1
@@ -107,9 +98,12 @@ mkdir -p "$APP_NEW/Contents/MacOS" "$APP_NEW/Contents/Resources"
 "$SWIFTC" -O -parse-as-library src/ShellApp.swift -o "$APP_NEW/Contents/MacOS/opencode"
 
 # launcher 从 MacOS 挪到 Resources：只作为资源被原生壳以 /bin/bash 调用
+# common.sh 必须与 launcher 同目录（launcher 按 $BASH_SOURCE 的目录 source 它）
 install -m 755 src/launcher.sh "$APP_NEW/Contents/Resources/launcher.sh"
+install -m 644 src/common.sh "$APP_NEW/Contents/Resources/common.sh"
 cp "$BUILD_DIR/AppIcon.icns" "$APP_NEW/Contents/Resources/AppIcon.icns"
 sed -e "s/@VERSION@/$APP_VERSION/g" -e "s/@BUILD@/$APP_BUILD/g" \
+  -e "s|@SERVICE_URL@|$SERVICE_URL|g" \
   src/Info.plist > "$APP_NEW/Contents/Info.plist"
 plutil -lint "$APP_NEW/Contents/Info.plist" >/dev/null
 
@@ -134,6 +128,8 @@ touch "$APP"
 # ── 3) supervisor.sh ──────────────────────────────────────────
 # 用 cp 覆盖而不是 mv：正在运行的旧 supervisor 进程是 exec 自旧 inode 的副本，
 # 覆盖文件不会打断它；mv 会让正在跑的那个路径消失（活文件只 cp 的规矩）。
+# 顺序有意义：先 common.sh 再 supervisor.sh，避免新 supervisor 短暂找不到 common.sh。
+install -m 644 src/common.sh "$STATE_DIR/common.sh"
 install -m 755 src/supervisor.sh "$STATE_DIR/supervisor.sh"
 
 # ── 4) launchd plist（内容有变才写，避免无谓重载）──────────────

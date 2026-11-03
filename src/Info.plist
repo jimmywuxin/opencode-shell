@@ -12,7 +12,10 @@
   <key>CFBundleShortVersionString</key><string>@VERSION@</string>
   <key>CFBundleVersion</key><string>@BUILD@</string>
   <key>NSHighResolutionCapable</key><true/>
-  <!-- WKWebView 加载 http://127.0.0.1:49374，ATS 对 loopback 也要显式放行 -->
+  <!-- 服务地址（含端口）。端口唯一来源是 src/common.sh 的 PORT，由 build.sh
+       渲染进来；壳读这个键，不再在 Swift 里写死（2026-11-03 清单 P2-2）。 -->
+  <key>OpencodeServiceURL</key><string>@SERVICE_URL@</string>
+  <!-- WKWebView 加载上面的 loopback 地址，ATS 对 loopback 也要显式放行 -->
   <key>NSAppTransportSecurity</key>
   <dict>
     <key>NSAllowsLocalNetworking</key><true/>

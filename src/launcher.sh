@@ -15,52 +15,24 @@
 #   - 失败时 exit 非 0 且 stdout 为空；
 #   - 诊断信息一律走 stderr（含 token 的 URL 绝不写 stderr）。
 #
-# 就绪判据：HTTP 状态码 200/204/302/401 都算（loopback 裸访问实测 200，
-# 未登录时也仍是 200 → 不能用状态码判断登录态）。
-# ⚠️ supervisor.sh 的 alive() 必须与本文件 ready() 保持一致：两边判据分叉
-# 会让服务被自己人循环重启（2026-11-03 清单 P0-1）。
+# 就绪判据只有一处定义：同目录 common.sh 的 oc_ready()（200/204/302/401）。
+# 判据分叉会让服务被自己人循环重启（2026-11-03 清单 P0-1），端口也由它兜底。
 #
 # 服务由 launchd 托管（~/Library/LaunchAgents/ai.opencode.web.plist，
 # RunAtLoad+KeepAlive）。本脚本不自己 nohup 起服务，避免与 launchd 抢端口。
 set -u
 
-PORT=49374
-URL="http://127.0.0.1:${PORT}"
-LABEL="ai.opencode.web"
-DOMAIN="gui/$(id -u)"
-PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-LOG_DIR="$HOME/.local/share/opencode/log"
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=common.sh
+. "$SELF_DIR/common.sh" || { echo "[launcher] 缺 common.sh（$SELF_DIR）" >&2; exit 1; }
 
-# 找 opencode 可执行文件。launchd/LaunchServices 给的 PATH 极简（/usr/bin:/bin:...），
-# 所以不能只靠 command -v；按常见安装位置依次探测，OPENCODE_BIN 可强制指定。
-resolve_oc() {
-  local c
-  if [ -n "${OPENCODE_BIN:-}" ] && [ -x "${OPENCODE_BIN}" ]; then
-    printf '%s' "$OPENCODE_BIN"; return 0
-  fi
-  for c in "$(command -v opencode 2>/dev/null)" \
-           "$HOME/.npm-global/bin/opencode" \
-           "$HOME/.opencode/bin/opencode" \
-           "$HOME/.local/bin/opencode" \
-           /opt/homebrew/bin/opencode \
-           /usr/local/bin/opencode; do
-    if [ -n "$c" ] && [ -x "$c" ]; then printf '%s' "$c"; return 0; fi
-  done
-  return 1
-}
 OC="$(resolve_oc || true)"
 
 # 诊断日志：只写 stderr，壳会原样落到 shell.log（不含 URL/token）。
 log() { printf '[launcher] %s\n' "$1" >&2; }
 
-probe_code() {
-  curl -s -o /dev/null -w "%{http_code}" --noproxy '*' --max-time 2 "$URL/" 2>/dev/null
-}
-
-ready() {
-  case "$(probe_code)" in 200|204|302|401) return 0 ;; esac
-  return 1
-}
+# 本地别名，保持下文可读；判据本体在 common.sh
+ready() { oc_ready; }
 
 # 取一次性配对链接：Web UI 未登录时会停在 pairing 页（curl 仍是 200）。
 # `opencode pair` 打印 http://127.0.0.1:PORT/auth/connect/<token>，

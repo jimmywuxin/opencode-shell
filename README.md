@@ -32,7 +32,8 @@ opencode.app
   │     ├─ 调 Contents/Resources/launcher.sh --url 等服务就绪 + 取 pair 链接
   │     ├─ WKWebView 加载该链接（服务端 302 + Set-Cookie，种 30 天会话）
   │     └─ 红叉/⌘W = orderOut 隐藏；Dock 图标 = 恢复
-  └─ Contents/Resources/launcher.sh  只负责 ensure + 打印 URL
+  ├─ Contents/Resources/launcher.sh  只负责 ensure + 打印 URL
+  └─ Contents/Resources/common.sh    端口 / 就绪判据 / CLI 探测（launcher 与 supervisor 共用）
 ```
 
 ## 要求
@@ -50,7 +51,7 @@ bash build.sh
 open ~/Applications/opencode.app
 ```
 
-`build.sh` 做四件事：生成图标（10 档 iconset）、编译原生壳并组装 `opencode.app`、安装 `supervisor.sh` 到 `~/.local/share/opencode/`、渲染 launchd plist 到 `~/Library/LaunchAgents/`。
+`build.sh` 做四件事：生成图标（10 档 iconset）、编译原生壳并组装 `opencode.app`、安装 `supervisor.sh` + `common.sh` 到 `~/.local/share/opencode/`、渲染 launchd plist 到 `~/Library/LaunchAgents/`。
 
 可选环境变量：
 
@@ -95,7 +96,7 @@ tail -20 ~/.local/share/opencode/log/shell.log # 壳的日志（不含 URL/token
 
 ## 配置
 
-- **端口**：固定 `49374`（opencode 托管服务的默认端口）。改端口要同步 `src/supervisor.sh` 的 `PORT`、`src/ShellApp.swift` 的 `baseURL` 与同源判定、`build.sh` 渲染的 plist。
+- **端口**：唯一来源是 `src/common.sh` 的 `PORT`。`build.sh` 从它渲染 `Info.plist` 的 `OpencodeServiceURL`（壳从这里读），`launcher.sh` / `supervisor.sh` 直接 `source` 同一份 `common.sh`。改端口只改一处 + 重跑 `build.sh`。
 - **日志**（`~/.local/share/opencode/log/`）：`shell.log`（0600，壳）、`supervisor.log`、`opencode.log`、`web.err.log`。
 - 壳只记 `ensure exit=`、URL **长度**、页面标题、cookie 名；pair 链接里的 token 等同登录凭据，不落盘，另有 `/auth/connect/<token>` 兜底脱敏。
 
