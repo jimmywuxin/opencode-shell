@@ -339,7 +339,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
                 shellLog("connect: no target url (ensure failed)")
                 self.loadMessagePage(
                     title: "无法连接 OpenCode",
-                    detail: "服务 30 秒内没有就绪，或取不到配对链接。\n请查看 ~/.local/share/opencode/log/web.err.log，然后按 ⌘R 重试。"
+                    detail: "服务 30 秒内没有就绪，或取不到配对链接。\n请查看 ~/.local/share/opencode/log/web.err.log，然后按 ⇧⌘R 重试。"
                 )
                 return
             }
@@ -476,9 +476,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         mainMenu.addItem(viewItem)
         let viewMenu = NSMenu(title: "视图")
         viewItem.submenu = viewMenu
-        let reloadItem = NSMenuItem(title: "重新连接", action: #selector(reloadPage(_:)), keyEquivalent: "r")
+        let reloadItem = NSMenuItem(title: "重新载入", action: #selector(reloadPage(_:)), keyEquivalent: "r")
         reloadItem.target = self
         viewMenu.addItem(reloadItem)
+        let reconnectItem = NSMenuItem(title: "重新连接", action: #selector(reconnect(_:)), keyEquivalent: "r")
+        reconnectItem.keyEquivalentModifierMask = [.command, .shift]
+        reconnectItem.target = self
+        viewMenu.addItem(reconnectItem)
         viewMenu.addItem(.separator())
         let zoomInItem = NSMenuItem(title: "放大", action: #selector(zoomIn(_:)), keyEquivalent: "=")
         zoomInItem.target = self
@@ -531,7 +535,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         NSApp.windowsMenu = windowMenu
     }
 
-    @objc private func reloadPage(_ sender: Any?) { connect() }
+    // ⌘R 只刷页面：cookie 已持久化，不重跑 launcher、不 mint 新 pair token，
+    // 也不打断页面状态。⇧⌘R 才走完整重连（ensure + 重新配对）。
+    @objc private func reloadPage(_ sender: Any?) {
+        guard webView.url != nil else { connect(); return }   // 还停在提示页 → 没得可刷
+        shellLog("reload: page reload")
+        webView.reload()
+    }
+
+    @objc private func reconnect(_ sender: Any?) { connect() }
 
     @objc private func showMainWindowAction(_ sender: Any?) { showMainWindow() }
 
@@ -593,7 +605,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         if (error as NSError).code == NSURLErrorCancelled { return }
         shellLog("load failed: \(error.localizedDescription)")
         connecting = false
-        loadMessagePage(title: "页面加载失败", detail: "\(error.localizedDescription)\n按 ⌘R 重新连接。")
+        loadMessagePage(title: "页面加载失败", detail: "\(error.localizedDescription)\n按 ⌘R 重载，或按 ⇧⌘R 重新连接。")
     }
 
     // MARK: - 内容进程回收

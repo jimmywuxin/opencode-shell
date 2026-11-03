@@ -69,7 +69,8 @@ CLI 探测顺序：`OPENCODE_BIN` → `PATH` → `~/.npm-global/bin` → `~/.ope
 | 点 Dock 图标 | 窗口恢复 |
 | 黄点 / `⌘M` | 标准最小化（Dock 右侧缩略图） |
 | `⌘Q` | 真正退出（服务不受影响） |
-| `⌘R` | 重新连接（重新 ensure + 重取 pair URL） |
+| `⌘R` | 重新载入页面（不重跑 launcher、不重取 pair URL） |
+| `⇧⌘R` | 重新连接（重新 ensure + 重取 pair URL） |
 | `⌘+` / `⌘-` / `⌘0` | 缩放 |
 | 窗口 → 显示主窗口 | 隐藏后的兜底入口 |
 
