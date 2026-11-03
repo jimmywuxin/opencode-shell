@@ -15,6 +15,8 @@
 #
 # 就绪判据：HTTP 状态码 200/204/302/401 都算（loopback 裸访问实测 200，
 # 未登录时也仍是 200 → 不能用状态码判断登录态）。
+# ⚠️ supervisor.sh 的 alive() 必须与本文件 ready() 保持一致：两边判据分叉
+# 会让服务被自己人循环重启（2026-11-03 清单 P0-1）。
 #
 # 服务由 launchd 托管（~/Library/LaunchAgents/ai.opencode.web.plist，
 # RunAtLoad+KeepAlive）。本脚本不自己 nohup 起服务，避免与 launchd 抢端口。

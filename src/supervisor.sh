@@ -50,10 +50,15 @@ cleanup() {
 }
 trap cleanup TERM INT
 
+# 判据必须与 launcher.sh 的 ready() 逐字一致（200/204/302/401）。
+# 只认 200/401 时，服务一旦进入 302 状态（内部重定向到 pairing 页），
+# 本脚本会每 20s 判一次死亡 → stop → start → 端口还没起来 → 再判死，
+# 自己人把服务重启到比没有 supervisor 更差（2026-11-03 清单 P0-1）。
 alive() {
   local code
   code="$(curl -s -o /dev/null -w "%{http_code}" --noproxy '*' --max-time 3 "$URL/" 2>/dev/null)"
-  [ "$code" = "200" ] || [ "$code" = "401" ]
+  case "$code" in 200|204|302|401) return 0 ;; esac
+  return 1
 }
 
 # 二进制指纹 = 目标文件 mtime + size。
