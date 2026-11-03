@@ -62,6 +62,21 @@ open ~/Applications/opencode.app
 
 CLI 探测顺序：`OPENCODE_BIN` → `PATH` → `~/.npm-global/bin` → `~/.opencode/bin` → `~/.local/bin` → `/opt/homebrew/bin` → `/usr/local/bin`。
 
+### 首次打开被 Gatekeeper 拦？
+
+本项目的包是 **ad-hoc 签名**（`codesign --sign -`），没有 Apple Developer ID、也没走 notarize。把构建产物拷给别人时，首次打开会被拦（「无法验证开发者」或「已损坏」），不是包坏了。
+
+任选一种放行：
+
+```bash
+# 最省事：去掉隔离属性
+xattr -dr com.apple.quarantine ~/Applications/opencode.app
+```
+
+或 Finder 里**右键 → 打开**再确认；或「系统设置 → 隐私与安全性」里点「仍要打开」。
+
+本机自己 `bash build.sh` 出来的产物不带 quarantine 属性，不会触发这一步。
+
 ## 窗口行为
 
 | 操作 | 行为 |
