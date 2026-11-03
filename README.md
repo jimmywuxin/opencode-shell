@@ -85,6 +85,14 @@ opencode service status                        # opencode 视角
 tail -20 ~/.local/share/opencode/log/shell.log # 壳的日志（不含 URL/token）
 ```
 
+不开终端也能排障 —— **视图**菜单里三项：
+
+| 菜单项 | 行为 |
+|---|---|
+| 重启服务 | `launchctl kickstart -k gui/$UID/ai.opencode.web`，等 5s 后自动重连 |
+| 打开日志 | 打开 `shell.log`；子菜单另有 `supervisor.log` / `web.err.log` |
+| 服务状态 | HTTP 码 + launchd 是否托管 + 端口 PID，一行结论 |
+
 ## 配置
 
 - **端口**：固定 `49374`（opencode 托管服务的默认端口）。改端口要同步 `src/supervisor.sh` 的 `PORT`、`src/ShellApp.swift` 的 `baseURL` 与同源判定、`build.sh` 渲染的 plist。

@@ -484,6 +484,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         reconnectItem.target = self
         viewMenu.addItem(reconnectItem)
         viewMenu.addItem(.separator())
+        // 排障入口：出问题不必开终端翻日志（2026-11-03 清单 P1-2）
+        let restartItem = NSMenuItem(title: "重启服务", action: #selector(restartService(_:)), keyEquivalent: "")
+        restartItem.target = self
+        viewMenu.addItem(restartItem)
+        // 日志子菜单：打开文件不涉及内容，不需要脱敏；但日志里本身不含 URL/token
+        let logsItem = NSMenuItem(title: "打开日志", action: nil, keyEquivalent: "")
+        let logsMenu = NSMenu(title: "打开日志")
+        for (title, name) in [("壳日志 shell.log", "shell.log"),
+                              ("守护日志 supervisor.log", "supervisor.log"),
+                              ("服务错误 web.err.log", "web.err.log")] {
+            let item = NSMenuItem(title: title, action: #selector(openLogAction(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = name
+            logsMenu.addItem(item)
+        }
+        logsItem.submenu = logsMenu
+        viewMenu.addItem(logsItem)
+        let statusItem = NSMenuItem(title: "服务状态", action: #selector(showServiceStatus(_:)), keyEquivalent: "")
+        statusItem.target = self
+        viewMenu.addItem(statusItem)
+        viewMenu.addItem(.separator())
         let zoomInItem = NSMenuItem(title: "放大", action: #selector(zoomIn(_:)), keyEquivalent: "=")
         zoomInItem.target = self
         viewMenu.addItem(zoomInItem)
@@ -556,6 +577,115 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     @objc private func zoomIn(_ sender: Any?) { webView.pageZoom = min(webView.pageZoom + 0.1, 3.0) }
     @objc private func zoomOut(_ sender: Any?) { webView.pageZoom = max(webView.pageZoom - 0.1, 0.5) }
     @objc private func zoomReset(_ sender: Any?) { webView.pageZoom = 1.0 }
+
+    // MARK: - 排障
+
+    private var logDirectory: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".local/share/opencode/log", isDirectory: true)
+    }
+
+    @objc private func openLogAction(_ sender: Any?) {
+        guard let name = (sender as? NSMenuItem)?.representedObject as? String else { return }
+        let url = logDirectory.appendingPathComponent(name)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            shellLog("open log: \(name) missing, opening directory")
+            NSWorkspace.shared.open(logDirectory)
+            return
+        }
+        shellLog("open log: \(name)")   // 只记文件名，不记内容
+        NSWorkspace.shared.open(url)
+    }
+
+    // kickstart -k 先 TERM supervisor（它自己 service stop），launchd 再拉起；
+    // 等 5s 让端口重新就绪再 connect（connect 的 launcher 另有 30s 兜底）。
+    // 服务未托管时 kickstart 会失败，但 connect → launcher 会 bootstrap，仍能恢复。
+    @objc private func restartService(_ sender: Any?) {
+        shellLog("restart service: kickstart ai.opencode.web")
+        loadMessagePage(title: "正在重启服务…", detail: nil)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let status = Self.runLaunchctl(["kickstart", "-k", "gui/\(getuid())/ai.opencode.web"])
+            shellLog("restart service: launchctl exit=\(status)")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { self?.connect() }
+        }
+    }
+
+    @objc private func showServiceStatus(_ sender: Any?) {
+        shellLog("status: probing")
+        showMainWindow()
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let code = Self.probeHTTPCode(baseURL)
+            let managed = Self.runLaunchctl(["print", "gui/\(getuid())/ai.opencode.web"]) == 0
+            let port = baseURL.port ?? 80
+            let pid = Self.listeningPID(port: port)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                let alert = NSAlert()
+                alert.messageText = "服务状态"
+                alert.informativeText = """
+                HTTP \(code)（就绪判据 200/204/302/401）
+                launchd：\(managed ? "已托管 ai.opencode.web" : "未托管（连接时会 bootstrap）")
+                端口 \(port)：\(pid.map { "PID \($0)" } ?? "无监听")
+                日志目录：\(self.logDirectory.path)
+                """
+                alert.addButton(withTitle: "好")
+                alert.beginSheetModal(for: self.window) { _ in }
+            }
+        }
+    }
+
+    private static func runLaunchctl(_ arguments: [String]) -> Int32 {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = arguments
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+        } catch {
+            shellLog("launchctl: spawn failed: \(error.localizedDescription)")
+            return -1
+        }
+        process.waitUntilExit()
+        return process.terminationStatus
+    }
+
+    private static func probeHTTPCode(_ url: URL) -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
+        process.arguments = ["-s", "-o", "/dev/null", "-w", "%{http_code}",
+                             "--noproxy", "*", "--max-time", "3", url.absoluteString]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+        } catch {
+            return "探测失败"
+        }
+        process.waitUntilExit()
+        let text = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return text.isEmpty ? "无响应" : text
+    }
+
+    private static func listeningPID(port: Int) -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+        process.arguments = ["-nP", "-iTCP:\(port)", "-sTCP:LISTEN", "-t"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+        } catch {
+            return nil
+        }
+        process.waitUntilExit()
+        let text = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return text.split(separator: "\n").first.map(String.init)
+    }
 
     // MARK: - WKNavigationDelegate
 
