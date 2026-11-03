@@ -78,6 +78,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     private var window: NSWindow!
     private var webView: WKWebView!
     private var connecting = false
+    // 当前这次加载是否用的裸 URL（决定 didFinish 里是否需要兜底重新配对）
+    private var bareLoadPending = false
 
     // 内容进程崩溃计数（5s 窗口内），见 webViewWebContentProcessDidTerminate
     private var contentCrashCount = 0
@@ -326,32 +328,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
 
     // MARK: - 连接
 
-    private func connect() {
+    private func connect(forcePair: Bool = false) {
         if connecting { return }
         connecting = true
-        shellLog("connect: ensuring service")
+        shellLog("connect: ensuring service (force pair=\(forcePair))")
         loadMessagePage(title: "正在连接 OpenCode…", detail: nil)
 
-        resolveTargetURL { [weak self] url in
+        // 已有有效会话 cookie 就走裸 URL：不调 `opencode pair`，服务端不再累积
+        // 一次性 token（清单 P1-3）。⇧⌘R / 「重新连接」强制重新配对。
+        let resolve: (Bool) -> Void = { [weak self] hasCookie in
             guard let self else { return }
-            self.connecting = false
-            guard let url else {
-                shellLog("connect: no target url (ensure failed)")
-                self.loadMessagePage(
-                    title: "无法连接 OpenCode",
-                    detail: "服务 30 秒内没有就绪，或取不到配对链接。\n请查看 ~/.local/share/opencode/log/web.err.log，然后按 ⇧⌘R 重试。"
-                )
-                return
+            let pair = forcePair || !hasCookie
+            if hasCookie && !forcePair { shellLog("connect: reusing session cookie") }
+            self.resolveTargetURL(pair: pair) { [weak self] url in
+                guard let self else { return }
+                self.connecting = false
+                guard let url else {
+                    shellLog("connect: no target url (ensure failed)")
+                    self.loadMessagePage(
+                        title: "无法连接 OpenCode",
+                        detail: "服务 30 秒内没有就绪，或取不到配对链接。\n请查看 ~/.local/share/opencode/log/web.err.log，然后按 ⇧⌘R 重试。"
+                    )
+                    return
+                }
+                // ⚠️ 不记录 URL 全文：pair 链接里的 token 就是登录凭据
+                shellLog("connect: url acquired (len=\(url.absoluteString.count)), loading")
+                self.bareLoadPending = !pair
+                self.webView.load(URLRequest(url: url))
             }
-            // ⚠️ 不记录 URL 全文：pair 链接里的 token 就是登录凭据
-            shellLog("connect: url acquired (len=\(url.absoluteString.count)), loading")
-            self.webView.load(URLRequest(url: url))
+        }
+        if forcePair { resolve(false) } else { hasSessionCookie(resolve) }
+    }
+
+    // 会话 cookie 由服务端种下，名字带端口（opencode_session_49374）。
+    // 只看名字前缀 + 过期时间：cookie 值等同登录凭据，绝不进日志。
+    private func hasSessionCookie(_ completion: @escaping (Bool) -> Void) {
+        WKWebsiteDataStore.default().httpCookieStore.getAllCookies { cookies in
+            let now = Date()
+            let hit = cookies.first { cookie in
+                guard cookie.name.hasPrefix("opencode_session") else { return false }
+                guard let expires = cookie.expiresDate else { return true }   // session cookie
+                return expires > now
+            }
+            shellLog("connect: session cookie \(hit == nil ? "absent" : "present")")
+            DispatchQueue.main.async { completion(hit != nil) }
         }
     }
 
-    // 执行 launcher.sh --url：等服务就绪 → stdout 拿一个 URL。
+    // 执行 launcher.sh：等服务就绪 → stdout 拿一个 URL。
+    // pair=true 走 --url（一次性 pair 链接，含 token）；false 走 --url-only（裸 URL）。
     // 契约：stdout 只有 URL、无其它输出；失败时非 0 且 stdout 空。
-    private func resolveTargetURL(completion: @escaping (URL?) -> Void) {
+    private func resolveTargetURL(pair: Bool, completion: @escaping (URL?) -> Void) {
         guard let script = Bundle.main.url(forResource: "launcher", withExtension: "sh") else {
             shellLog("ensure: launcher.sh missing from bundle")
             completion(nil)
@@ -360,7 +387,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         DispatchQueue.global(qos: .userInitiated).async {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/bin/bash")
-            process.arguments = [script.path, "--url"]
+            process.arguments = [script.path, pair ? "--url" : "--url-only"]
             let out = Pipe()
             let err = Pipe()
             process.standardOutput = out
@@ -564,7 +591,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         webView.reload()
     }
 
-    @objc private func reconnect(_ sender: Any?) { connect() }
+    @objc private func reconnect(_ sender: Any?) { connect(forcePair: true) }
 
     @objc private func showMainWindowAction(_ sender: Any?) { showMainWindow() }
 
@@ -712,6 +739,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        // 裸 URL 兜底：cookie 过期或服务端会话失效时，服务端会把人送回 /auth 配对页。
+        // 这时补一次真正的 pair（best-effort：路径判断不中就让用户按 ⇧⌘R）。
+        if bareLoadPending {
+            bareLoadPending = false
+            if webView.url?.path.hasPrefix("/auth") == true {
+                shellLog("connect: bare url redirected to auth page, forcing pair")
+                connect(forcePair: true)
+                return
+            }
+        }
         // 只记长度级信息，不记 URL（pair 链接带 token）
         shellLog("loaded: \(webView.title ?? "")")
         webView.evaluateJavaScript("document.title") { value, _ in

@@ -5,8 +5,10 @@
 # 窗口、红叉、菜单全部归原生壳，本脚本不再碰任何浏览器。
 #
 # 用法：
-#   launcher.sh --url    ensure 服务就绪 → stdout 打印**一个**目标 URL
-#   launcher.sh          同上但不打印 URL（只 ensure，退出码表示成败）
+#   launcher.sh --url       ensure 服务就绪 → stdout 打印**一个**目标 URL（优先一次性 pair 链接）
+#   launcher.sh --url-only  ensure 服务就绪 → stdout 只打印裸 URL，不 mint pair token
+#                           （壳已持有有效会话 cookie 时走这条，避免服务端累积无效 token）
+#   launcher.sh             同上但不打印 URL（只 ensure，退出码表示成败）
 #
 # 契约（原生壳按这个解析）：
 #   - --url 的 stdout **只允许出现一个 URL**，不得有 echo/进度/通知；
@@ -117,13 +119,18 @@ case "${1:-}" in
     pair_url || printf '%s' "$URL"
     exit 0
     ;;
+  --url-only)
+    ensure_ready || exit 1
+    printf '%s' "$URL"
+    exit 0
+    ;;
   --ensure|"")
     ensure_ready || exit 1
     log "服务就绪：$URL"
     exit 0
     ;;
   *)
-    log "未知参数：$1（用法：launcher.sh [--url|--ensure]）"
+    log "未知参数：$1（用法：launcher.sh [--url|--url-only|--ensure]）"
     exit 2
     ;;
 esac

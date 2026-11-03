@@ -102,7 +102,7 @@ tail -20 ~/.local/share/opencode/log/shell.log # 壳的日志（不含 URL/token
 ## 关键取舍（都实测过）
 
 - **红叉必须 `orderOut` + `windowShouldClose` 返回 `false`**：`performMiniaturize` 会留 Dock 缩略图（那是黄点），`NSApp.hide` 会把菜单栏一起藏掉，`close()` 会丢窗口状态。
-- **认证走 `opencode pair`**：一次性 `/auth/connect/<token>` 链接，加载后服务端 `302 + Set-Cookie`；不重放旧链接，失败就重新取。
+- **认证走 `opencode pair`**：一次性 `/auth/connect/<token>` 链接，加载后服务端 `302 + Set-Cookie`，会话 cookie 存 30 天。**已有有效 cookie 时不重新 pair**，直接加载裸 URL（`launcher.sh --url-only`），避免服务端累积一次性 token；只有 cookie 缺失/失效或按 `⇧⌘R` 才重新取链接。
 - **cookie 存 `.default()` data store**，否则每次启动都掉登录。
 - **ATS 必须放行 loopback**（`NSAllowsLocalNetworking`），否则 WKWebView 直接 `NSURLError`。
 - **`launchctl bootstrap` 在 IDE/终端派生的进程里会报 error 5**，只有经 LaunchServices 启动的 `.app` 能 bootstrap——所以 ensure 必须由壳调，`bash build.sh --reload` 要在真终端跑。
