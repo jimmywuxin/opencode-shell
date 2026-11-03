@@ -50,3 +50,33 @@ resolve_oc() {
   done
   return 1
 }
+
+# ── 服务版本新鲜度（2026-11-04 实踩：升级后壳打开仍是旧版）──────────────
+# npm 升级会替换磁盘文件（新 inode），但长驻服务进程仍映射旧 inode。
+# 「运行中进程的 inode ≠ 磁盘 inode」⇒ 进程跑的是旧二进制 ⇒ 前端也是旧的。
+# 用 inode+size 而非 mtime：touch/重装同版本不该触发换血，换 inode 才该。
+#
+# oc_disk_fp    磁盘 CLI 指纹（size|inode），-L 跟随 ~/.npm-global/bin 软链
+# oc_running_fp 监听 $PORT 的进程实际映射的 opencode 二进制指纹（size|inode）
+# oc_service_fresh  0=新鲜 1=陈旧（该换血）2=无法判断（保守放行，不乱重启）
+oc_disk_fp() {
+  local c
+  c="$(resolve_oc)" || return 1
+  stat -L -f '%z|%i' "$c" 2>/dev/null
+}
+
+oc_running_fp() {
+  local pid
+  pid="$(lsof -nP -iTCP:"$PORT" -sTCP:LISTEN -t 2>/dev/null | head -1)"
+  [ -n "$pid" ] || return 1
+  # txt 段里映射的可执行文件：npm 装的叫 opencode.exe，brew 装的叫 opencode
+  lsof -p "$pid" 2>/dev/null \
+    | awk '$4=="txt" && $5=="REG" && $9 ~ /\/opencode(\.exe)?$/ {print $7"|"$8; exit}'
+}
+
+oc_service_fresh() {
+  local disk run
+  disk="$(oc_disk_fp)" || return 2
+  run="$(oc_running_fp)" || return 2
+  [ "$run" = "$disk" ]
+}

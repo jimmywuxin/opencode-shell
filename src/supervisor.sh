@@ -58,6 +58,14 @@ restart_service() { # $1 = 触发原因（写日志用）
 
 if alive; then
   log "端口 $PORT 已有服务在跑，接管守护"
+  # 接管的进程可能是旧二进制起的（supervisor 中断期间发生过升级、或别人手动起的）。
+  # 必须在这里校验：下面 OC_FP 记的是磁盘当前指纹，若接管的是旧进程，
+  # 之后「磁盘指纹 vs OC_FP」永远相等 → 永不换血（2026-11-04 实踩）。
+  oc_service_fresh
+  case $? in
+    1) restart_service "接管的进程是旧二进制（$(oc_running_fp) ≠ $(oc_disk_fp)）" ;;
+    2) log "接管进程版本无法判断，按现状守护" ;;
+  esac
 else
   log "启动托管服务"
   "$OC" service start >> "$LOG_DIR/supervisor.log" 2>&1

@@ -72,9 +72,12 @@ start_service() {
 }
 
 # 服务就绪：已在跑直接返回；否则拉起后最多等 30s。
-ensure_ready() {
-  ready && return 0
-  start_service || return 1
+# 就绪之外还校验「运行中的进程是不是当前磁盘二进制」：npm 升级只换磁盘文件，
+# 长驻进程还跑旧二进制 → 壳每次打开都加载旧前端（2026-11-04 实踩：
+# 升级 2.1.4→2.2.5 后退出 app 重开仍是旧版，直到手动重启服务）。
+# 换血走 kickstart -k：TERM supervisor（它自己 service stop）→ launchd 拉新的
+# → 新 supervisor 用磁盘新二进制 start。与壳菜单「重启服务」同一条路。
+wait_ready() {
   local i
   for i in $(seq 1 60); do
     ready && return 0
@@ -82,6 +85,34 @@ ensure_ready() {
   done
   log "服务 30 秒未就绪，请看 $LOG_DIR/web.err.log"
   return 1
+}
+
+ensure_fresh() {
+  [ -x "$OC" ] || return 0
+  local fresh
+  oc_service_fresh; fresh=$?
+  [ "$fresh" = 0 ] && return 0
+  [ "$fresh" = 2 ] && { log "服务版本无法判断（无监听或非 opencode 进程），放行"; return 0; }
+  log "服务进程是旧二进制（运行 $(oc_running_fp) ≠ 磁盘 $(oc_disk_fp)），kickstart 换血"
+  if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
+    launchctl kickstart -k "$DOMAIN/$LABEL" >/dev/null 2>&1 || true
+  else
+    # launchd 未托管（少见）：直接 stop/start，supervisor 不在场不冲突
+    "$OC" service stop >/dev/null 2>&1 || true
+    sleep 2
+    "$OC" service start >/dev/null 2>&1 || true
+  fi
+  log "refreshed=1"   # 壳据此决定是否重载页面（stderr 通道，不碰 stdout 契约）
+  wait_ready          # 换血后必须等就绪，否则调用方会误判失败走二次兜底
+}
+
+ensure_ready() {
+  if ready; then
+    if ensure_fresh && ready; then return 0; fi
+    # 换血失败/超时 → 落到下面的三级兜底
+  fi
+  start_service || return 1
+  wait_ready
 }
 
 case "${1:-}" in

@@ -1,5 +1,26 @@
 # CHANGELOG
 
+## v1.2.2 — 2026-11-04
+
+**打开/恢复 app 时自动换血旧服务**（实踩：CLI 升级 2.1.4→2.2.5 后，退出 app 重开仍显示旧版，直到手动重启服务）
+
+根因两层：
+
+1. `launcher.sh` 的 `ensure_ready` 只判「端口活着」就复用现有进程 —— npm 升级只换磁盘文件，长驻服务还跑旧二进制，壳每次打开都加载旧前端。supervisor 的 20s 指纹轮询只是兜底，存在竞态窗口
+2. 红叉 = `orderOut` 隐藏（非退出），app 进程与旧前端一直留在内存；点 Dock 图标恢复只把窗口拉回来，**从不重新加载页面**
+
+改动：
+
+- **`common.sh`**：新增 `oc_disk_fp` / `oc_running_fp` / `oc_service_fresh` —— 用 **inode+size** 对比「磁盘 CLI」与「运行中服务进程实际映射的二进制」。npm 升级必然换 inode；touch/重装同版本不换 inode，不误触发换血
+- **`launcher.sh`**：`ensure_ready` 集成 `ensure_fresh` —— 判定陈旧即 `launchctl kickstart -k` 换血（与壳菜单「重启服务」同路），换血后等就绪再返回；stderr 打 `refreshed=1` 标记（stdout 的「只输出一个 URL」契约不变）。无法判定（端口无监听/非 opencode 进程）时保守放行
+- **`supervisor.sh`**：修「接管守护」盲区 —— supervisor 启动时若端口已有服务在跑，原逻辑把 `OC_FP` 记成**磁盘当前指纹**，若接管的是旧二进制进程，之后指纹比对永远相等、永不换血。现接管时先跑一次 `oc_service_fresh`，陈旧即换
+- **`ShellApp.swift`**：`applicationShouldHandleReopen` / `applicationDidBecomeActive` 在窗口处于隐藏态时改为 `reopenRefreshingService()` —— 跑 bundle launcher 做新鲜度校验：换血过 → 重走 `connect()` 全量刷新前端；没换 → 只拉回窗口，页面状态（草稿/滚动位置）不动。⌘Q 真退出后的启动路径经 `connect()` → launcher 自然覆盖
+
+行为变化：
+
+- **升级 CLI 后无需手动重启服务**：⌘Q 重开、或红叉隐藏后点图标恢复，服务旧进程会被自动换血并加载新前端
+- 隐藏恢复时若服务换血，页面会重载（此时前端必是旧的，重载是预期行为）；服务没变则保持原页面
+
 ## v1.2.1 — 2026-11-03
 
 按 `docs/改进清单_2026-11-03.md` 落地（P0-1 / P0-2 / P0-3 / P1-1 / P1-2 / P1-3 / P2-2 / P2-3）。

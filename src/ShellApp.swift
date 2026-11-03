@@ -117,7 +117,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
 
     // 点 Dock 图标（应用已在运行）
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        showMainWindow()
+        if window.isVisible {
+            showMainWindow()
+        } else {
+            // 红叉隐藏期间可能发生过 CLI 升级：恢复 = 先校验服务新鲜度，
+            // 换血过就全量重连拿新前端；没换血只拉回窗口，保住页面状态
+            reopenRefreshingService()
+        }
         return true
     }
 
@@ -125,7 +131,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     func applicationDidBecomeActive(_ notification: Notification) {
         guard window != nil else { return }
         if window.isMiniaturized { window.deminiaturize(nil) }
-        if !window.isVisible { window.makeKeyAndOrderFront(nil) }
+        if !window.isVisible {
+            reopenRefreshingService()
+            return
+        }
+        window.makeKeyAndOrderFront(nil)
     }
 
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
@@ -608,6 +618,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         if window.isMiniaturized { window.deminiaturize(nil) }
         window.makeKeyAndOrderFront(nil)
         activateApp()
+    }
+
+    // 从隐藏状态恢复：launcher 的 ensure 会顺带校验「运行中服务 vs 磁盘二进制」，
+    // 旧进程会被 kickstart 换血（stderr 打 refreshed=1）。换血过 → 重走 connect
+    // 全量刷新前端；没换 → 只显示窗口，页面状态（草稿/滚动位置）不动。
+    private func reopenRefreshingService() {
+        if connecting { showMainWindow(); return }
+        guard let script = Bundle.main.url(forResource: "launcher", withExtension: "sh") else {
+            showMainWindow()
+            return
+        }
+        shellLog("reopen: checking service freshness")
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let refreshed = Self.runLauncherRefreshCheck(script)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if refreshed {
+                    shellLog("reopen: service was refreshed, reconnecting")
+                    self.connect()
+                } else {
+                    self.showMainWindow()
+                }
+            }
+        }
+    }
+
+    // 跑 launcher.sh --url-only：ensure 内部完成探活+新鲜度校验（必要时换血）。
+    // stdout 的 URL 这里不消费；只看 stderr 有没有 refreshed=1。
+    private static func runLauncherRefreshCheck(_ script: URL) -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.arguments = [script.path, "--url-only"]
+        let out = Pipe()
+        let err = Pipe()
+        process.standardOutput = out
+        process.standardError = err
+        do {
+            try process.run()
+        } catch {
+            shellLog("reopen: launcher spawn failed: \(error.localizedDescription)")
+            return false
+        }
+        process.waitUntilExit()
+        let errText = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        return process.terminationStatus == 0 && errText.contains("refreshed=1")
     }
 
     @objc private func zoomIn(_ sender: Any?) { webView.pageZoom = min(webView.pageZoom + 0.1, 3.0) }
